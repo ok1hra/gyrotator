@@ -12,19 +12,39 @@ const int REV = 20190810;
 /* Changelog
 20190810 - HMC5883L compass support
 */
+// #define MPU6886   // gyroscope
+// #define MPU9250   // gyroscope old
+// #define HMC5883L   // compass old
+
 int AntRadiationWidth=30;
 
 #include <M5Stack.h>
-#include "utility/MPU9250.h"
-#include "utility/quaternionFilters.h"
-// HMC5883L
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_HMC5883_U.h>
-Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+// #if defined(MPU6886)
+  float accX = 0.0F;  // Define variables for storing inertial sensor data
+  float accY = 0.0F;
+  float accZ = 0.0F;
+  float gyroX = 0.0F;
+  float gyroY = 0.0F;
+  float gyroZ = 0.0F;
+  float pitch = 0.0F;
+  float roll  = 0.0F;
+  float yaw   = 0.0F;
+  float temp = 0.0F;
+// #endif
+#if defined(MPU9250)
+  #include "utility/MPU9250.h"
+  #include "utility/quaternionFilters.h"
+  MPU9250 IMU;
+#endif
+#if defined(HMC5883L)
+  // HMC5883L
+  #include <Wire.h>
+  #include <Adafruit_Sensor.h>
+  #include <Adafruit_HMC5883_U.h>
+  Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+#endif
 bool EnableAZ=false;
 
-MPU9250 IMU;
 // Kalman kalmanX, kalmanY, kalmanZ; // Create the Kalman instances
 int Target=0;
 int TargetOld=0;
@@ -43,7 +63,13 @@ bool EnableMap=false;
 
 void setup(){
   M5.begin();
-  Wire.begin();
+  // #if defined(MPU6886)
+    M5.Power.begin();  // Init Power module.
+    M5.IMU.Init();  // Init IMU sensor.
+  // #endif
+  #if defined(HMC5883L)
+    Wire.begin();
+  #endif
   // Start device display with ID of sensor
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
@@ -55,46 +81,45 @@ void setup(){
   M5.Lcd.print(REV);
   // delay(3000);
 
-  // Read the WHO_AM_I register, this is a good test of communication
-  byte c = IMU.readByte(MPU9250_ADDRESS, WHO_AM_I_MPU9250);
+  #if defined(MPU9250)
+    // Read the WHO_AM_I register, this is a good test of communication
+    byte c = IMU.readByte(MPU9250_ADDRESS, WHO_AM_I_MPU9250);
+    if (c == 0x71) // WHO_AM_I should always be 0x68
+    {
+      // Start by performing self test and reporting values
+      IMU.MPU9250SelfTest(IMU.SelfTest);
+      // Calibrate gyro and accelerometers, load biases in bias registers
+      IMU.calibrateMPU9250(IMU.gyroBias, IMU.accelBias);
+      IMU.initMPU9250();
+      // Initialize device for active mode read of acclerometer, gyroscope, and
+      // temperature
+      // Read the WHO_AM_I register of the magnetometer, this is a good test of
+      // communication
+      byte d = IMU.readByte(AK8963_ADDRESS, WHO_AM_I_AK8963);
+      // Get magnetometer calibration from AK8963 ROM
+      IMU.initAK8963(IMU.magCalibration);
+      // Initialize device for active mode read of magnetometer
+    } // if (c == 0x71)
+    // else
+    // {
+    //   Serial.print("Could not connect to MPU9250: 0x");
+    //   Serial.println(c, HEX);
+    //   while(1) ; // Loop forever if communication doesn't happen
+    // }
+  #endif
 
-  if (c == 0x71) // WHO_AM_I should always be 0x68
-  {
-    // Start by performing self test and reporting values
-    IMU.MPU9250SelfTest(IMU.SelfTest);
-
-    // Calibrate gyro and accelerometers, load biases in bias registers
-    IMU.calibrateMPU9250(IMU.gyroBias, IMU.accelBias);
-
-    IMU.initMPU9250();
-    // Initialize device for active mode read of acclerometer, gyroscope, and
-    // temperature
-
-    // Read the WHO_AM_I register of the magnetometer, this is a good test of
-    // communication
-    byte d = IMU.readByte(AK8963_ADDRESS, WHO_AM_I_AK8963);
-
-    // Get magnetometer calibration from AK8963 ROM
-    IMU.initAK8963(IMU.magCalibration);
-    // Initialize device for active mode read of magnetometer
-
-  } // if (c == 0x71)
-  // else
-  // {
-  //   Serial.print("Could not connect to MPU9250: 0x");
-  //   Serial.println(c, HEX);
-  //   while(1) ; // Loop forever if communication doesn't happen
-  // }
   M5.Lcd.setTextSize(1); // Set text size to normal, 2 is twice normal etc.
   M5.Lcd.fillScreen(BLACK);   // clears the screen and buffer
   DirectionalRosette(120, 120, 110);
 
-  // HMC5883L
-  Serial.begin(115200);
-  if(!mag.begin()){
-      Serial.println("HMC5883L not found");
-      // while(1);
-  }
+  #if defined(HMC5883L)
+    // HMC5883L
+    Serial.begin(115200);
+    if(!mag.begin()){
+        Serial.println("HMC5883L not found");
+        // while(1);
+    }
+  #endif
 
 }
 //------------------------------------------------------------------------------
@@ -139,20 +164,20 @@ void Buttons(){
   }
   if(M5.BtnC.wasReleased()){
     if(millis()-LongPressButtTimeout[0]<LongPressButtTimeout[1]){
-      EnableAZ=!EnableAZ;
-      if(EnableAZ==true){
-        if(!mag.begin()){
-            Serial.println("HMC5883L not found");
-            EnableAZ=false;
+      #if defined(HMC5883L)
+        EnableAZ=!EnableAZ;
+        if(EnableAZ==true){
+          if(!mag.begin()){
+              Serial.println("HMC5883L not found");
+              EnableAZ=false;
+          }
         }
-      }
+      #endif
     }else{
       M5.Power.powerOFF();
     }
     LcdNeedRefresh=true;
   }
-
-
   M5.update();
 }
 //------------------------------------------------------------------------------
@@ -175,13 +200,61 @@ void Watchdog(){
     }
   }
   if(millis()-GetAzTimeout[0]>GetAzTimeout[1]){
-    HMC5883L();
-    GetGyroData();
-    if(FAstMove==true){
-      Target=Target+(int)(IMU.gz)+(int)(IMU.gy);
-    }else{
-      Target=Target+((int)(IMU.gz)+(int)(IMU.gy))/8;
-    }
+    // #if defined(MPU6886)
+      M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
+      M5.IMU.getAccelData(
+          &accX, &accY,
+          &accZ);  // Stores the triaxial accelerometer.
+      // M5.IMU.getAhrsData(
+      //     &pitch, &roll,
+      //     &yaw);  // Stores the inertial sensor attitude.
+      M5.IMU.getTempData(&temp);  // Stores the inertial sensor temperature to
+                                  // temp.
+      if(FAstMove==true){
+        if(abs(gyroZ)>8){
+          Target=Target+(int)(gyroZ);
+        }
+      }else{
+        Target=Target+(int)(gyroZ/8);
+      }
+
+      Serial.print("X Y Z acc ");
+      Serial.print(accX);
+      Serial.print(" ");
+      Serial.print(accY);
+      Serial.print(" ");
+      Serial.print(accZ);
+      Serial.print(" gyro ");
+      Serial.print(gyroX);
+      Serial.print(" ");
+      Serial.print(gyroY);
+      Serial.print(" ");
+      Serial.print(gyroZ);
+      Serial.print(" pitch/roll/yaw/temp ");
+      Serial.print(pitch);
+      Serial.print(" ");
+      Serial.print(roll);
+      Serial.print(" ");
+      Serial.print(yaw);
+      Serial.print(" ");
+      Serial.print(temp);
+      Serial.print("|");
+      Serial.println(Target);
+    // #endif
+
+    #if defined(HMC5883L)
+      HMC5883L();
+    #endif
+
+    #if defined(MPU9250)
+      GetGyroData();
+      if(FAstMove==true){
+        Target=Target+(int)(IMU.gz)+(int)(IMU.gy);
+      }else{
+        Target=Target+((int)(IMU.gz)+(int)(IMU.gy))/8;
+      }
+    #endif
+
     if(Target!=TargetOld){
       if(Target>360){
         // Target=Target-360;
@@ -195,6 +268,7 @@ void Watchdog(){
       LcdNeedRefresh=true;
       HidenTarget=false;
     }
+
     GetAzTimeout[0]=millis();
   }
   if(millis()-GetBattTimeout[0]>GetBattTimeout[1]){
@@ -206,45 +280,47 @@ void Watchdog(){
   }
 }
 //------------------------------------------------------------------------------
-void HMC5883L(){
-  if(EnableAZ==true){
-    // vytvoření a následné načtení balíku dat ze senzoru
-   sensors_event_t magData;
-   mag.getEvent(&magData);
-   // vytištění informací o velikostech magnetických sil v osách x,y,z
-   // hodnoty jsou v jednotce uT (mikroTesla)
-   Serial.print("X: "); Serial.print(magData.magnetic.x); Serial.print(" ");
-   Serial.print("Y: "); Serial.print(magData.magnetic.y); Serial.print(" ");
-   Serial.print("Z: "); Serial.print(magData.magnetic.z); Serial.print(" ");
-   Serial.println("uT");
-   // výpočet velikosti úhlu natočení ze sil v osách x a y
-   float uhelNatoceni = atan2(magData.magnetic.y, magData.magnetic.x);
-   // pro přesnější získání úhlu natočení je nutné navštívit tento odkaz:
-   // http://www.magnetic-declination.com/
-   // na zmíněné stránce zadáte svoji lokaci a z ní zjistíte údaj
-   // "magnetic declinaction" - magnetický sklon, ten je ještě nutné převést z úhlů na radiány
-   // tedy např. v Brně je tento úhel cca 4 stupně = 0.07 radiánů
-   // pokud se vám nepodaří najít mag. sklon, stačí 2 řádky pod komentářem vymazat
-   float magDeclinRad = 0.07;
-   uhelNatoceni += magDeclinRad;
+#if defined(HMC5883L)
+  void HMC5883L(){
+    if(EnableAZ==true){
+      // vytvoření a následné načtení balíku dat ze senzoru
+     sensors_event_t magData;
+     mag.getEvent(&magData);
+     // vytištění informací o velikostech magnetických sil v osách x,y,z
+     // hodnoty jsou v jednotce uT (mikroTesla)
+     Serial.print("X: "); Serial.print(magData.magnetic.x); Serial.print(" ");
+     Serial.print("Y: "); Serial.print(magData.magnetic.y); Serial.print(" ");
+     Serial.print("Z: "); Serial.print(magData.magnetic.z); Serial.print(" ");
+     Serial.println("uT");
+     // výpočet velikosti úhlu natočení ze sil v osách x a y
+     float uhelNatoceni = atan2(magData.magnetic.y, magData.magnetic.x);
+     // pro přesnější získání úhlu natočení je nutné navštívit tento odkaz:
+     // http://www.magnetic-declination.com/
+     // na zmíněné stránce zadáte svoji lokaci a z ní zjistíte údaj
+     // "magnetic declinaction" - magnetický sklon, ten je ještě nutné převést z úhlů na radiány
+     // tedy např. v Brně je tento úhel cca 4 stupně = 0.07 radiánů
+     // pokud se vám nepodaří najít mag. sklon, stačí 2 řádky pod komentářem vymazat
+     float magDeclinRad = 0.07;
+     uhelNatoceni += magDeclinRad;
 
-   // korekce výpočtu úhlu natočení
-   if(uhelNatoceni < 0)
-     uhelNatoceni += 2*PI;
-   if(uhelNatoceni > 2*PI)
-     uhelNatoceni -= 2*PI;
-   // konečný přepočet úhlu natočení z radiánů na stupně
-   float uhelNatoceniSt = uhelNatoceni * 180/M_PI;
-   Azimuth=uhelNatoceniSt;
-   if(Azimuth!=AzimuthOld){
-      LcdNeedRefresh=true;
+     // korekce výpočtu úhlu natočení
+     if(uhelNatoceni < 0)
+       uhelNatoceni += 2*PI;
+     if(uhelNatoceni > 2*PI)
+       uhelNatoceni -= 2*PI;
+     // konečný přepočet úhlu natočení z radiánů na stupně
+     float uhelNatoceniSt = uhelNatoceni * 180/M_PI;
+     Azimuth=uhelNatoceniSt;
+     if(Azimuth!=AzimuthOld){
+        LcdNeedRefresh=true;
+     }
+     // vytištění údajů o úhlu natočení, 0 stupňů znamená sever
+     Serial.print("Uhel natoceni: "); Serial.print(uhelNatoceniSt);
+     Serial.println(" stupnu");
+     Serial.println();
    }
-   // vytištění údajů o úhlu natočení, 0 stupňů znamená sever
-   Serial.print("Uhel natoceni: "); Serial.print(uhelNatoceniSt);
-   Serial.println(" stupnu");
-   Serial.println();
- }
-}
+  }
+#endif
 
 //------------------------------------------------------------------------------
 void BattIcon(int x, int y, int COLOR, int LEVEL){
@@ -447,66 +523,66 @@ int8_t getBatteryLevel()
   return -1;
 }
 //------------------------------------------------------------------------------
+#if defined(MPU9250)
+  void GetGyroData(){
+    // If intPin goes high, all data registers have new data
+    // On interrupt, check if data ready interrupt
+    if (IMU.readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
+    {
+      IMU.readAccelData(IMU.accelCount);  // Read the x/y/z adc values
+      IMU.getAres();
 
-void GetGyroData(){
-  // If intPin goes high, all data registers have new data
-  // On interrupt, check if data ready interrupt
-  if (IMU.readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
-  {
-    IMU.readAccelData(IMU.accelCount);  // Read the x/y/z adc values
-    IMU.getAres();
+      // Now we'll calculate the accleration value into actual g's
+      // This depends on scale being set
+      IMU.ax = (float)IMU.accelCount[0]*IMU.aRes; // - accelBias[0];
+      IMU.ay = (float)IMU.accelCount[1]*IMU.aRes; // - accelBias[1];
+      IMU.az = (float)IMU.accelCount[2]*IMU.aRes; // - accelBias[2];
 
-    // Now we'll calculate the accleration value into actual g's
-    // This depends on scale being set
-    IMU.ax = (float)IMU.accelCount[0]*IMU.aRes; // - accelBias[0];
-    IMU.ay = (float)IMU.accelCount[1]*IMU.aRes; // - accelBias[1];
-    IMU.az = (float)IMU.accelCount[2]*IMU.aRes; // - accelBias[2];
+      IMU.readGyroData(IMU.gyroCount);  // Read the x/y/z adc values
+      IMU.getGres();
 
-    IMU.readGyroData(IMU.gyroCount);  // Read the x/y/z adc values
-    IMU.getGres();
+      // Calculate the gyro value into actual degrees per second
+      // This depends on scale being set
+      IMU.gx = (float)IMU.gyroCount[0]*IMU.gRes;
+      IMU.gy = (float)IMU.gyroCount[1]*IMU.gRes;
+      IMU.gz = (float)IMU.gyroCount[2]*IMU.gRes;
 
-    // Calculate the gyro value into actual degrees per second
-    // This depends on scale being set
-    IMU.gx = (float)IMU.gyroCount[0]*IMU.gRes;
-    IMU.gy = (float)IMU.gyroCount[1]*IMU.gRes;
-    IMU.gz = (float)IMU.gyroCount[2]*IMU.gRes;
+      IMU.readMagData(IMU.magCount);  // Read the x/y/z adc values
+      IMU.getMres();
+      // User environmental x-axis correction in milliGauss, should be
+      // automatically calculated
+      IMU.magbias[0] = +470.;
+      // User environmental x-axis correction in milliGauss TODO axis??
+      IMU.magbias[1] = +120.;
+      // User environmental x-axis correction in milliGauss
+      IMU.magbias[2] = +125.;
 
-    IMU.readMagData(IMU.magCount);  // Read the x/y/z adc values
-    IMU.getMres();
-    // User environmental x-axis correction in milliGauss, should be
-    // automatically calculated
-    IMU.magbias[0] = +470.;
-    // User environmental x-axis correction in milliGauss TODO axis??
-    IMU.magbias[1] = +120.;
-    // User environmental x-axis correction in milliGauss
-    IMU.magbias[2] = +125.;
+      // Calculate the magnetometer values in milliGauss
+      // Include factory calibration per data sheet and user environmental
+      // corrections
+      // Get actual magnetometer value, this depends on scale being set
+      IMU.mx = (float)IMU.magCount[0]*IMU.mRes*IMU.magCalibration[0] -
+                 IMU.magbias[0];
+      IMU.my = (float)IMU.magCount[1]*IMU.mRes*IMU.magCalibration[1] -
+                 IMU.magbias[1];
+      IMU.mz = (float)IMU.magCount[2]*IMU.mRes*IMU.magCalibration[2] -
+                 IMU.magbias[2];
+    } // if (readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
 
-    // Calculate the magnetometer values in milliGauss
-    // Include factory calibration per data sheet and user environmental
-    // corrections
-    // Get actual magnetometer value, this depends on scale being set
-    IMU.mx = (float)IMU.magCount[0]*IMU.mRes*IMU.magCalibration[0] -
-               IMU.magbias[0];
-    IMU.my = (float)IMU.magCount[1]*IMU.mRes*IMU.magCalibration[1] -
-               IMU.magbias[1];
-    IMU.mz = (float)IMU.magCount[2]*IMU.mRes*IMU.magCalibration[2] -
-               IMU.magbias[2];
-  } // if (readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
+    // Must be called before updating quaternions!
+    IMU.updateTime();
 
-  // Must be called before updating quaternions!
-  IMU.updateTime();
-
-  // Sensors x (y)-axis of the accelerometer is aligned with the y (x)-axis of
-  // the magnetometer; the magnetometer z-axis (+ down) is opposite to z-axis
-  // (+ up) of accelerometer and gyro! We have to make some allowance for this
-  // orientationmismatch in feeding the output to the quaternion filter. For the
-  // MPU-9250, we have chosen a magnetic rotation that keeps the sensor forward
-  // along the x-axis just like in the LSM9DS0 sensor. This rotation can be
-  // modified to allow any convenient orientation convention. This is ok by
-  // aircraft orientation standards! Pass gyro rate as rad/s
-//  MadgwickQuaternionUpdate(ax, ay, az, gx*PI/180.0f, gy*PI/180.0f, gz*PI/180.0f,  my,  mx, mz);
-  MahonyQuaternionUpdate(IMU.ax, IMU.ay, IMU.az, IMU.gx*DEG_TO_RAD,
-                         IMU.gy*DEG_TO_RAD, IMU.gz*DEG_TO_RAD, IMU.my,
-                         IMU.mx, IMU.mz, IMU.deltat);
-
-}
+    // Sensors x (y)-axis of the accelerometer is aligned with the y (x)-axis of
+    // the magnetometer; the magnetometer z-axis (+ down) is opposite to z-axis
+    // (+ up) of accelerometer and gyro! We have to make some allowance for this
+    // orientationmismatch in feeding the output to the quaternion filter. For the
+    // MPU-9250, we have chosen a magnetic rotation that keeps the sensor forward
+    // along the x-axis just like in the LSM9DS0 sensor. This rotation can be
+    // modified to allow any convenient orientation convention. This is ok by
+    // aircraft orientation standards! Pass gyro rate as rad/s
+  //  MadgwickQuaternionUpdate(ax, ay, az, gx*PI/180.0f, gy*PI/180.0f, gz*PI/180.0f,  my,  mx, mz);
+    MahonyQuaternionUpdate(IMU.ax, IMU.ay, IMU.az, IMU.gx*DEG_TO_RAD,
+                           IMU.gy*DEG_TO_RAD, IMU.gz*DEG_TO_RAD, IMU.my,
+                           IMU.mx, IMU.mz, IMU.deltat);
+  }
+#endif
