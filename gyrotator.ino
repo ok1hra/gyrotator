@@ -16,7 +16,24 @@ const int REV = 20190810;
 // #define MPU9250   // gyroscope old
 // #define HMC5883L   // compass old
 
+String YOUR_CALL = "BD:2F";
 int AntRadiationWidth=30;
+
+// wifi/mqtt
+#include <PubSubClient.h>
+#include <WiFi.h>
+WiFiClient espClient;
+PubSubClient client(espClient);
+const char* ssid        = "SSID";
+const char* password    = "pass";
+const char* mqtt_server = "54.38.157.134";
+unsigned long lastMsg = 0;
+#define MSG_BUFFER_SIZE (50)
+char msg[MSG_BUFFER_SIZE];
+int value = 0;
+void setupWifi();
+void callback(char* topic, byte* payload, unsigned int length);
+void reConnect();
 
 #include <M5Stack.h>
 // #if defined(MPU6886)
@@ -67,6 +84,12 @@ void setup(){
     M5.Power.begin();  // Init Power module.
     M5.IMU.Init();  // Init IMU sensor.
   // #endif
+
+  // wifi/mqtt
+  setupWifi();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
   #if defined(HMC5883L)
     Wire.begin();
   #endif
@@ -128,7 +151,131 @@ void loop(){
   Watchdog();
   LcdShow();
   Buttons();
+
+  // wifi/mqtt
+    if (!client.connected()) {
+        reConnect();
+    }
+    client.loop();  // This function is called periodically to allow clients to
+                    // process incoming messages and maintain connections to the
+                    // server.
+
+    // unsigned long now =
+    //     millis();  // Obtain the host startup duration.  获取主机开机时长
+    // if (now - lastMsg > 2000) {
+    //     lastMsg = now;
+    //     ++value;
+    //     snprintf(msg, MSG_BUFFER_SIZE, "hello world #%ld",
+    //              value);  // Format to the specified string and store it in MSG.
+    //                       // 格式化成指定字符串并存入msg中
+    //     M5.Lcd.print("Publish message: ");
+    //     M5.Lcd.println(msg);
+    //     client.publish("M5Stack", msg);  // Publishes a message to the specified
+    //                                      // topic.  发送一条消息至指定话题
+    //     if (value % 12 == 0) {
+    //         M5.Lcd.clear();
+    //         M5.Lcd.setCursor(0, 0);
+    //     }
+    // }
 }
+//------------------------------------------------------------------------------
+void setupWifi() {
+    delay(10);
+    // M5.Lcd.printf("Connecting to %s", ssid);
+    Serial.print("Connecting to %s");
+    Serial.println(ssid);
+    WiFi.mode(WIFI_STA);  // Set the mode to WiFi station mode.
+    WiFi.begin(ssid, password);  // Start Wifi connection.
+
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        // M5.Lcd.print(".");
+        Serial.print(".");
+    }
+    // M5.Lcd.printf("\nSuccess\n");
+    Serial.println("\nSuccess\n");
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+    // M5.Lcd.print("Message arrived [");
+    // M5.Lcd.print(topic);
+    // M5.Lcd.print("] ");
+    // for (int i = 0; i < length; i++) {
+    //     M5.Lcd.print((char)payload[i]);
+    // }
+    // M5.Lcd.println();
+    String CheckTopicBase;
+    CheckTopicBase.reserve(100);
+    byte* p = (byte*)malloc(length);
+    memcpy(p,payload,length);
+    // static bool HeardBeatStatus;
+    Serial.print("RX MQTT ");
+    Serial.println(String(topic));
+
+      // Azimuth
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/Azimuth";
+      if ( CheckTopicBase.equals( String(topic) ) ){
+        Azimuth = 0;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            Azimuth = Azimuth + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        Serial.print("Azimuth =  ");
+        Serial.println(Azimuth);
+        LcdNeedRefresh=true;
+      }
+
+      // Status
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/Status";
+      if ( CheckTopicBase.equals( String(topic) ) ){
+        Azimuth = 0;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            Azimuth = Azimuth + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        Serial.print("Azimuth =  ");
+        Serial.println(Azimuth);
+        LcdNeedRefresh=true;
+      }
+}
+
+void reConnect() {
+    while (!client.connected()) {
+        // M5.Lcd.print("Attempting MQTT connection...");
+        Serial.print("Attempting MQTT connection...");
+        // Create a random client ID.  创建一个随机的客户端ID
+        String clientId = "M5Stack-";
+        clientId += String(random(0xffff), HEX);
+        // Attempt to connect.  尝试重新连接
+        if (client.connect(clientId.c_str())) {
+            // M5.Lcd.printf("\nSuccess\n");
+            Serial.println("Success");
+            // Once connected, publish an announcement to the topic.
+            // 一旦连接，发送一条消息至指定话题
+            client.publish("BD:2F/ROT/M5StackClient", "connected");
+            // ... and resubscribe.  重新订阅话题
+            client.subscribe("BD:2F/ROT/Azimuth");
+            client.subscribe("BD:2F/ROT/Status");
+        } else {
+            // M5.Lcd.print("failed, rc=");
+            // M5.Lcd.print(client.state());
+            // M5.Lcd.println("try again in 5 seconds");
+            Serial.print("failed, rc=");
+            Serial.print(client.state());
+            Serial.println("try again in 5 seconds");
+            delay(5000);
+        }
+    }
+}
+
 //------------------------------------------------------------------------------
 
 void Buttons(){
@@ -152,10 +299,12 @@ void Buttons(){
     if(EnableMap==false){
       Arrow(Azimuth,120,120,100, 0x000000);
     }
-    Azimuth=Target;
+    // Azimuth=Target;
     if(EnableMap==false){
       Arrow(Azimuth,120,120,100, GREEN);
     }
+    // client.publish("BD:2F/ROT/Target", char(Target) );
+    MqttPubString("Target", String(Target), 0);
     LcdNeedRefresh=true;
   }
 
@@ -180,14 +329,47 @@ void Buttons(){
   }
   M5.update();
 }
+//-----------------------------------------------------------------------------------
+void MqttPubString(String TOPIC, String DATA, bool RETAIN){
+  char charbuf[50];
+  const int MqttBuferSize = 1000; // 1000
+  static char mqttTX[MqttBuferSize];
+  static char mqttPath[MqttBuferSize];
+
+   // // memcpy( charbuf, mac, 6);
+   // ETH.macAddress().toCharArray(charbuf, 10);
+   // charbuf[6] = 0;
+  // Interrupts(false);
+  // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
+  // if(mqttClient.connected()==true){
+  //   if (mqttClient.connect(MACchar)) {
+      String topic = String(YOUR_CALL) + "/ROT/"+TOPIC;
+      topic.toCharArray( mqttPath, 50 );
+      DATA.toCharArray( mqttTX, 50 );
+      // mqttClient.publish(mqttPath, mqttTX, RETAIN);
+      client.publish(mqttPath, mqttTX);
+
+  //   }
+  // }
+  // Interrupts(true);
+}
 //------------------------------------------------------------------------------
 
 void Watchdog(){
+  static long ArrowTimer = 0;
+  if(millis()-ArrowTimer > 100){
+    if( abs(Target-Azimuth)<20 && HidenTarget==false){
+      LcdNeedRefresh=true;
+      HidenTarget=true;
+    }
+    ArrowTimer=millis();
+  }
+
   if(millis()-TargetTimeout[0]>TargetTimeout[1] && HidenTarget==false){
     TargetTimeout[0]=millis();
     // Target=Azimuth;
-    LcdNeedRefresh=true;
-    HidenTarget=true;
+    // LcdNeedRefresh=true;
+    // HidenTarget=true;
     if(LowBattery==true){
       M5.Lcd.fillScreen(RED);
       M5.Lcd.setTextColor(BLACK, RED); // Set pixel color; 1 on the monochrome screen
@@ -211,35 +393,35 @@ void Watchdog(){
       M5.IMU.getTempData(&temp);  // Stores the inertial sensor temperature to
                                   // temp.
       if(FAstMove==true){
-        if(abs(gyroZ)>8){
+        if(abs(gyroZ)>7){
           Target=Target+(int)(gyroZ);
         }
       }else{
         Target=Target+(int)(gyroZ/8);
       }
 
-      Serial.print("X Y Z acc ");
-      Serial.print(accX);
-      Serial.print(" ");
-      Serial.print(accY);
-      Serial.print(" ");
-      Serial.print(accZ);
-      Serial.print(" gyro ");
-      Serial.print(gyroX);
-      Serial.print(" ");
-      Serial.print(gyroY);
-      Serial.print(" ");
-      Serial.print(gyroZ);
-      Serial.print(" pitch/roll/yaw/temp ");
-      Serial.print(pitch);
-      Serial.print(" ");
-      Serial.print(roll);
-      Serial.print(" ");
-      Serial.print(yaw);
-      Serial.print(" ");
-      Serial.print(temp);
-      Serial.print("|");
-      Serial.println(Target);
+      // Serial.print("X Y Z acc ");
+      // Serial.print(accX);
+      // Serial.print(" ");
+      // Serial.print(accY);
+      // Serial.print(" ");
+      // Serial.print(accZ);
+      // Serial.print(" gyro ");
+      // Serial.print(gyroX);
+      // Serial.print(" ");
+      // Serial.print(gyroY);
+      // Serial.print(" ");
+      // Serial.print(gyroZ);
+      // Serial.print(" pitch/roll/yaw/temp ");
+      // Serial.print(pitch);
+      // Serial.print(" ");
+      // Serial.print(roll);
+      // Serial.print(" ");
+      // Serial.print(yaw);
+      // Serial.print(" ");
+      // Serial.print(temp);
+      // Serial.print("|");
+      // Serial.println(Target);
     // #endif
 
     #if defined(HMC5883L)
