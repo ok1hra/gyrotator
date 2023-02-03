@@ -8,7 +8,7 @@
  find it useful you can buy me a beer some time.
  Modified by Brent Wilkins July 19, 2016
  */
-const int REV = 20190810;
+const int REV = 20230202;
 /* Changelog
 20190810 - HMC5883L compass support
 */
@@ -68,15 +68,14 @@ int TargetOld=0;
 int AzimuthOld=0;
 int Azimuth=0;
 bool LcdNeedRefresh=true;
-long TargetTimeout[2]={0,2000};
+long TargetTimeout[2]={0,4000};
 long GetAzTimeout[2]={0,100};
-long GetBattTimeout[2]={0,5000};
 bool HidenTarget=true;
 bool FAstMove=true;
 bool LowBattery=false;
 long LongPressButtTimeout[2]={0,1000};
 bool EnableMap=false;
-
+int Status = 4;
 
 void setup(){
   M5.begin();
@@ -94,14 +93,14 @@ void setup(){
     Wire.begin();
   #endif
   // Start device display with ID of sensor
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(80,100); M5.Lcd.print("GYROTATOR");
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(125,133);
-  M5.Lcd.print("rev.");
-  M5.Lcd.print(REV);
+  // M5.Lcd.fillScreen(BLACK);
+  // M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
+  // M5.Lcd.setTextSize(3);
+  // M5.Lcd.setCursor(80,100); M5.Lcd.print("GYROTATOR");
+  // M5.Lcd.setTextSize(1);
+  // M5.Lcd.setCursor(125,133);
+  // M5.Lcd.print("rev.");
+  // M5.Lcd.print(REV);
   // delay(3000);
 
   #if defined(MPU9250)
@@ -131,9 +130,9 @@ void setup(){
     // }
   #endif
 
-  M5.Lcd.setTextSize(1); // Set text size to normal, 2 is twice normal etc.
-  M5.Lcd.fillScreen(BLACK);   // clears the screen and buffer
-  DirectionalRosette(120, 120, 110);
+  // M5.Lcd.setTextSize(1); // Set text size to normal, 2 is twice normal etc.
+  // M5.Lcd.fillScreen(BLACK);   // clears the screen and buffer
+  // DirectionalRosette(120, 120, 110);
 
   #if defined(HMC5883L)
     // HMC5883L
@@ -180,20 +179,37 @@ void loop(){
 }
 //------------------------------------------------------------------------------
 void setupWifi() {
-    delay(10);
-    // M5.Lcd.printf("Connecting to %s", ssid);
-    Serial.print("Connecting to %s");
-    Serial.println(ssid);
-    WiFi.mode(WIFI_STA);  // Set the mode to WiFi station mode.
-    WiFi.begin(ssid, password);  // Start Wifi connection.
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(80,100); M5.Lcd.print("GYROTATOR");
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setCursor(125,133);
+  M5.Lcd.print("rev.");
+  M5.Lcd.print(REV);
+  // M5.Lcd.setCursor(125,170);
+  // M5.Lcd.print("Connecting to ");
+  M5.Lcd.setCursor(0,200);
+  M5.Lcd.printf("Connecting to %s", ssid);
+  delay(10);
+  Serial.print("Connecting to %s");
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);  // Set the mode to WiFi station mode.
+  WiFi.begin(ssid, password);  // Start Wifi connection.
 
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        // M5.Lcd.print(".");
-        Serial.print(".");
-    }
-    // M5.Lcd.printf("\nSuccess\n");
-    Serial.println("\nSuccess\n");
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      M5.Lcd.print(".");
+      Serial.print(".");
+  }
+  // M5.Lcd.setCursor(125,210);
+  M5.Lcd.print("Success");
+  Serial.println("\nSuccess\n");
+  String topic = String(YOUR_CALL) + "/ROT/";
+  M5.Lcd.setCursor(0,220);
+  M5.Lcd.print("MQTT ");
+  M5.Lcd.print(topic);
+  delay(2000);
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -209,8 +225,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     byte* p = (byte*)malloc(length);
     memcpy(p,payload,length);
     // static bool HeardBeatStatus;
-    Serial.print("RX MQTT ");
-    Serial.println(String(topic));
+    // Serial.print("RX MQTT ");
+    // Serial.println(String(topic));
 
       // Azimuth
       CheckTopicBase = String(YOUR_CALL) + "/ROT/Azimuth";
@@ -229,21 +245,42 @@ void callback(char* topic, byte* payload, unsigned int length) {
         LcdNeedRefresh=true;
       }
 
-      // Status
-      CheckTopicBase = String(YOUR_CALL) + "/ROT/Status";
+      // Target
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/Target";
       if ( CheckTopicBase.equals( String(topic) ) ){
-        Azimuth = 0;
+        Target = 0;
         unsigned long exp = 1;
         for (int i = length-1; i >=0 ; i--) {
           // Numbers only
           if(p[i]>=48 && p[i]<=58){
-            Azimuth = Azimuth + (p[i]-48)*exp;
+            Target = Target + (p[i]-48)*exp;
             exp = exp*10;
           }
         }
-        Serial.print("Azimuth =  ");
-        Serial.println(Azimuth);
+        Serial.print("Target =  ");
+        Serial.println(Target);
         LcdNeedRefresh=true;
+      }
+
+      // Status
+      // 1 PwmDwnCCW|2 CCW|3 PwmUpCCW|4 off|5 PwmUpCW|6 CW|7 PwmDwnCW
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/Status";
+      if ( CheckTopicBase.equals( String(topic) ) ){
+        Status = 0;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            Status = Status + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        Serial.print("Status = ");
+        Serial.println(Status);
+        if(Status==4){
+          HidenTarget=true;
+          LcdNeedRefresh=true;
+        }
       }
 }
 
@@ -263,7 +300,13 @@ void reConnect() {
             client.publish("BD:2F/ROT/M5StackClient", "connected");
             // ... and resubscribe.  重新订阅话题
             client.subscribe("BD:2F/ROT/Azimuth");
+            client.subscribe("BD:2F/ROT/Target");
             client.subscribe("BD:2F/ROT/Status");
+
+            MqttPubString("get", "0", 0);
+            M5.Lcd.fillScreen(BLACK);   // clears the screen and buffer
+            DirectionalRosette(120, 120, 110);
+            LcdNeedRefresh=true;
         } else {
             // M5.Lcd.print("failed, rc=");
             // M5.Lcd.print(client.state());
@@ -296,16 +339,15 @@ void Buttons(){
   }
 
   if(M5.BtnB.wasPressed()) {
-    if(EnableMap==false){
+    if(EnableMap==false && HidenTarget==false){
       Arrow(Azimuth,120,120,100, 0x000000);
-    }
-    // Azimuth=Target;
-    if(EnableMap==false){
       Arrow(Azimuth,120,120,100, GREEN);
+      // client.publish("BD:2F/ROT/Target", char(Target) );
+      MqttPubString("Target", String(Target), 0);
+      // Azimuth=Target;
+      HidenTarget=true;
+      LcdNeedRefresh=true;
     }
-    // client.publish("BD:2F/ROT/Target", char(Target) );
-    MqttPubString("Target", String(Target), 0);
-    LcdNeedRefresh=true;
   }
 
   if(M5.BtnC.wasPressed()){
@@ -313,15 +355,15 @@ void Buttons(){
   }
   if(M5.BtnC.wasReleased()){
     if(millis()-LongPressButtTimeout[0]<LongPressButtTimeout[1]){
-      #if defined(HMC5883L)
+      // #if defined(HMC5883L)
         EnableAZ=!EnableAZ;
-        if(EnableAZ==true){
-          if(!mag.begin()){
-              Serial.println("HMC5883L not found");
-              EnableAZ=false;
-          }
-        }
-      #endif
+        // if(EnableAZ==true){
+        //   if(!mag.begin()){
+        //       Serial.println("HMC5883L not found");
+        //       EnableAZ=false;
+        //   }
+        // }
+      // #endif
     }else{
       M5.Power.powerOFF();
     }
@@ -356,20 +398,14 @@ void MqttPubString(String TOPIC, String DATA, bool RETAIN){
 //------------------------------------------------------------------------------
 
 void Watchdog(){
-  static long ArrowTimer = 0;
-  if(millis()-ArrowTimer > 100){
-    if( abs(Target-Azimuth)<20 && HidenTarget==false){
-      LcdNeedRefresh=true;
-      HidenTarget=true;
-    }
-    ArrowTimer=millis();
-  }
 
-  if(millis()-TargetTimeout[0]>TargetTimeout[1] && HidenTarget==false){
-    TargetTimeout[0]=millis();
-    // Target=Azimuth;
+  static long BattTimer = 0;
+  if(millis()-BattTimer > 5000){
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setCursor(245, 170);
+    getBatteryLevel();
     // LcdNeedRefresh=true;
-    // HidenTarget=true;
+
     if(LowBattery==true){
       M5.Lcd.fillScreen(RED);
       M5.Lcd.setTextColor(BLACK, RED); // Set pixel color; 1 on the monochrome screen
@@ -380,8 +416,26 @@ void Watchdog(){
       M5.Power.powerOFF();
       M5.update();
     }
+    BattTimer=millis();
   }
-  if(millis()-GetAzTimeout[0]>GetAzTimeout[1]){
+
+  static long ArrowTimer = 0;
+  if(millis()-ArrowTimer > 100){
+    if( abs(Target-Azimuth)<20 && HidenTarget==false){
+      LcdNeedRefresh=true;
+      HidenTarget=true;
+    }
+    ArrowTimer=millis();
+  }
+
+  if(millis()-TargetTimeout[0]>TargetTimeout[1] && HidenTarget==false && Status==4){
+    TargetTimeout[0]=millis();
+    // Target=Azimuth;
+    LcdNeedRefresh=true;
+    HidenTarget=true;
+  }
+
+  if(millis()-GetAzTimeout[0]>GetAzTimeout[1] && Status==4){
     // #if defined(MPU6886)
       M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
       M5.IMU.getAccelData(
@@ -393,7 +447,7 @@ void Watchdog(){
       M5.IMU.getTempData(&temp);  // Stores the inertial sensor temperature to
                                   // temp.
       if(FAstMove==true){
-        if(abs(gyroZ)>7){
+        if(abs(gyroZ)>8){
           Target=Target+(int)(gyroZ);
         }
       }else{
@@ -450,16 +504,9 @@ void Watchdog(){
       LcdNeedRefresh=true;
       HidenTarget=false;
     }
-
     GetAzTimeout[0]=millis();
   }
-  if(millis()-GetBattTimeout[0]>GetBattTimeout[1]){
-    GetBattTimeout[0]=millis();
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.setCursor(245, 170);
-    getBatteryLevel();
-    // LcdNeedRefresh=true;
-  }
+
 }
 //------------------------------------------------------------------------------
 #if defined(HMC5883L)
@@ -560,14 +607,14 @@ void LcdShow(){
       // M5.Lcd.setCursor(32, 64); M5.Lcd.print((int)(IMU.gy));
       Arrow(TargetOld,120,120,100, 0x000000);
       if(HidenTarget!=true){
-        Arrow(Target,120,120,100, LIGHTGREY);
+        Arrow(Target,120,120,100, DARKGREY);
       }
       TargetOld=Target;
       if(Azimuth!=AzimuthOld){
         Arrow(AzimuthOld,120,120,100, BLACK);
         AzimuthOld=Azimuth;
       }
-      Arrow(Azimuth,120,120,100, GREEN);
+      Arrow(Azimuth,120,120,100, DARKGREEN);
       //  }
       // M5.Lcd.setCursor(96, 64); M5.Lcd.print("o/s");
 
@@ -584,7 +631,7 @@ void LcdShow(){
     }
 
     M5.Lcd.setTextSize(5);
-    M5.Lcd.setTextColor(GREEN ,BLACK);
+    M5.Lcd.setTextColor(DARKGREEN ,BLACK);
     // M5.Lcd.setCursor(240, 10);
     M5.Lcd.setCursor(210, 10);
     if(Azimuth<10){
@@ -598,8 +645,9 @@ void LcdShow(){
     M5.Lcd.setCursor(300, 5);
     M5.Lcd.print("o");
     M5.Lcd.setTextSize(3);
-    if(HidenTarget!=true){
-      M5.Lcd.setTextColor(WHITE ,BLACK);
+    // if(HidenTarget!=true){
+    if( abs(Target-Azimuth)>10){
+      M5.Lcd.setTextColor(DARKGREY ,BLACK);
     }else{
       M5.Lcd.setTextColor(BLACK ,BLACK);
     }
@@ -617,11 +665,17 @@ void LcdShow(){
     M5.Lcd.setTextSize(3);
 
     M5.Lcd.setCursor(10, 210);
-    M5.Lcd.setTextColor(LIGHTGREY ,BLACK);
+    M5.Lcd.setTextColor(DARKGREY ,BLACK);
     if(FAstMove==true){
       M5.Lcd.print( "F" );
+      M5.Lcd.setCursor(26, 217);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.print( "ast" );
     }else{
       M5.Lcd.print( "S" );
+      M5.Lcd.setCursor(27, 217);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.print( "low" );
     }
     // if(EnableMap==true){
     //   M5.Lcd.print( "M" );
@@ -681,26 +735,33 @@ void DirectionalRosette(int X, int Y, int R){
 //------------------------------------------------------------------------------
 int8_t getBatteryLevel()
 {
+  static byte BattStatusPrev = 0x00;
+  static byte BattStatus = 0x00;
   Wire.beginTransmission(0x75);
   Wire.write(0x78);
   if (Wire.endTransmission(false) == 0
    && Wire.requestFrom(0x75, 1)) {
-    switch (Wire.read() & 0xF0) {
+    BattStatus = Wire.read() & 0xF0;
+    switch (BattStatus) {
     case 0xE0: BattIcon(290, 130, RED, 1);
     LowBattery=true;
     break;
-    case 0xC0: BattIcon(290, 130, DARKGREY, 2);
+    case 0xC0: BattIcon(290, 130, LIGHTGREY, 2);
     LowBattery=false;
     break;
-    case 0x80: BattIcon(290, 130, BLACK, 3);
+    case 0x80: BattIcon(290, 130, DARKGREY, 3);
     LowBattery=false;
     break;
-    case 0x00: BattIcon(290, 130, BLACK, 4);
+    case 0x00: BattIcon(290, 130, DARKGREY, 4);
     LowBattery=false;
     break;
     default: return 0;
     break;
     }
+  }
+  if(BattStatus != BattStatusPrev){
+    BattStatusPrev = BattStatus;
+    LcdNeedRefresh = true;
   }
   return -1;
 }
