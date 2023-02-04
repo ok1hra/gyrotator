@@ -1,5 +1,5 @@
 
-// compile for M5STACK core esp32
+// compile for M5STACK Fire esp32
 
 /* MPU9250 Basic Example Code
  by: Kris Winer
@@ -8,9 +8,14 @@
  find it useful you can buy me a beer some time.
  Modified by Brent Wilkins July 19, 2016
  */
-const int REV = 20230202;
+const int REV = 20230204;
 /* Changelog
 20190810 - HMC5883L compass support
+
+TODO
+- integrovat WX obrazovku na prepinani pravym butt, pokud je wx, disablovat start Rotate
+- stahnout po mqtt jmeno rotatoru a zobrazit na lcd
+
 */
 // #define MPU6886   // gyroscope
 // #define MPU9250   // gyroscope old
@@ -67,21 +72,27 @@ int Target=0;
 int TargetOld=0;
 int AzimuthOld=0;
 int Azimuth=0;
+int StartAzimuth = 0;
+int MaxRotateDegree = 0;
 bool LcdNeedRefresh=true;
 long TargetTimeout[2]={0,4000};
-long GetAzTimeout[2]={0,100};
 bool HidenTarget=true;
 bool FAstMove=true;
 bool LowBattery=false;
 long LongPressButtTimeout[2]={0,1000};
 bool EnableMap=false;
 int Status = 4;
+bool OnlineStatus=false;
+bool CheckOnlineInProgress=false;
+long CheckOnlineTimer=0;
+bool GyroCalibrate = false;
 
 void setup(){
   M5.begin();
   // #if defined(MPU6886)
     M5.Power.begin();  // Init Power module.
     M5.IMU.Init();  // Init IMU sensor.
+    M5.Lcd.setBrightness(200);
   // #endif
 
   // wifi/mqtt
@@ -148,7 +159,7 @@ void setup(){
 
 void loop(){
   Watchdog();
-  LcdShow();
+  LcdShow(StartAzimuth);
   Buttons();
 
   // wifi/mqtt
@@ -243,23 +254,52 @@ void callback(char* topic, byte* payload, unsigned int length) {
         Serial.print("Azimuth =  ");
         Serial.println(Azimuth);
         LcdNeedRefresh=true;
+        OnlineStatus=true;
+        CheckOnlineInProgress=false;
       }
 
-      // Target
-      CheckTopicBase = String(YOUR_CALL) + "/ROT/Target";
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/StartAzimuth";
       if ( CheckTopicBase.equals( String(topic) ) ){
-        Target = 0;
+        StartAzimuth = 0;
         unsigned long exp = 1;
         for (int i = length-1; i >=0 ; i--) {
           // Numbers only
           if(p[i]>=48 && p[i]<=58){
-            Target = Target + (p[i]-48)*exp;
+            StartAzimuth = StartAzimuth + (p[i]-48)*exp;
             exp = exp*10;
           }
         }
-        Serial.print("Target =  ");
-        Serial.println(Target);
-        LcdNeedRefresh=true;
+        Serial.print("StartAzimuth =  ");
+        Serial.println(StartAzimuth);
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.setCursor(40,100); M5.Lcd.print("CALIBRATE...");
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.setCursor(40,130); M5.Lcd.print("do not move");
+        // DirectionalRosette(120, 120, 110);
+        // LcdNeedRefresh=true;
+      }
+
+      CheckTopicBase = String(YOUR_CALL) + "/ROT/MaxRotateDegree";
+      if ( CheckTopicBase.equals( String(topic) ) ){
+        MaxRotateDegree = 0;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            MaxRotateDegree = MaxRotateDegree + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        Serial.print("MaxRotateDegree =  ");
+        Serial.println(MaxRotateDegree);
+        // M5.Lcd.fillScreen(BLACK);
+        // M5.Lcd.setTextColor(WHITE ,BLACK); // Set pixel color; 1 on the monochrome screen
+        // M5.Lcd.setTextSize(3);
+        // M5.Lcd.setCursor(80,100); M5.Lcd.print("CALIBRATE\ndo not move");
+        // DirectionalRosette(120, 120, 110);
+        // LcdNeedRefresh=true;
       }
 
       // Status
@@ -279,8 +319,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
         Serial.println(Status);
         if(Status==4){
           HidenTarget=true;
-          LcdNeedRefresh=true;
         }
+        OnlineStatus=true;
+        CheckOnlineInProgress=false;
+        LcdNeedRefresh=true;
       }
 }
 
@@ -300,10 +342,14 @@ void reConnect() {
             client.publish("BD:2F/ROT/M5StackClient", "connected");
             // ... and resubscribe.  重新订阅话题
             client.subscribe("BD:2F/ROT/Azimuth");
-            client.subscribe("BD:2F/ROT/Target");
+            client.subscribe("BD:2F/ROT/StartAzimuth");
+            client.subscribe("BD:2F/ROT/MaxRotateDegree");
+            // client.subscribe("BD:2F/ROT/Target");
             client.subscribe("BD:2F/ROT/Status");
 
             MqttPubString("get", "0", 0);
+            CheckOnlineInProgress=true;
+            CheckOnlineTimer=millis();
             M5.Lcd.fillScreen(BLACK);   // clears the screen and buffer
             DirectionalRosette(120, 120, 110);
             LcdNeedRefresh=true;
@@ -341,12 +387,17 @@ void Buttons(){
   if(M5.BtnB.wasPressed()) {
     if(EnableMap==false && HidenTarget==false){
       Arrow(Azimuth,120,120,100, 0x000000);
-      Arrow(Azimuth,120,120,100, GREEN);
+      // Arrow(Azimuth,120,120,100, GREEN);
       // client.publish("BD:2F/ROT/Target", char(Target) );
       MqttPubString("Target", String(Target), 0);
+      CheckOnlineInProgress=true;
+      CheckOnlineTimer=millis();
       // Azimuth=Target;
       HidenTarget=true;
       LcdNeedRefresh=true;
+    }
+    if(Status!=4){
+      MqttPubString("stop", "0", 0);
     }
   }
 
@@ -399,6 +450,19 @@ void MqttPubString(String TOPIC, String DATA, bool RETAIN){
 
 void Watchdog(){
 
+  if(millis()-CheckOnlineTimer > 5000 && CheckOnlineInProgress==true){
+    OnlineStatus=false;
+    CheckOnlineInProgress=false;
+  }
+
+  static long PingTimer = 0;
+  if(millis()-PingTimer > 120000){
+    MqttPubString("get", "0", 0);
+    CheckOnlineInProgress=true;
+    CheckOnlineTimer=millis();
+    PingTimer=millis();
+  }
+
   static long BattTimer = 0;
   if(millis()-BattTimer > 5000){
     M5.Lcd.setTextSize(2);
@@ -406,16 +470,16 @@ void Watchdog(){
     getBatteryLevel();
     // LcdNeedRefresh=true;
 
-    if(LowBattery==true){
-      M5.Lcd.fillScreen(RED);
-      M5.Lcd.setTextColor(BLACK, RED); // Set pixel color; 1 on the monochrome screen
-      M5.Lcd.setTextSize(3);
-      M5.Lcd.setCursor(60,90); M5.Lcd.print("BATTERY LOW");
-      M5.Lcd.setCursor(60,130); M5.Lcd.print("SHUTDOWN...");
-      delay(5000);
-      M5.Power.powerOFF();
-      M5.update();
-    }
+    // if(LowBattery==true){
+    //   M5.Lcd.fillScreen(RED);
+    //   M5.Lcd.setTextColor(BLACK, RED); // Set pixel color; 1 on the monochrome screen
+    //   M5.Lcd.setTextSize(3);
+    //   M5.Lcd.setCursor(60,90); M5.Lcd.print("BATTERY LOW");
+    //   M5.Lcd.setCursor(60,130); M5.Lcd.print("SHUTDOWN...");
+    //   delay(5000);
+    //   M5.Power.powerOFF();
+    //   M5.update();
+    // }
     BattTimer=millis();
   }
 
@@ -435,7 +499,8 @@ void Watchdog(){
     HidenTarget=true;
   }
 
-  if(millis()-GetAzTimeout[0]>GetAzTimeout[1] && Status==4){
+  static long GetAzTimeout=0;
+  if(millis()-GetAzTimeout >100 && Status==4){
     // #if defined(MPU6886)
       M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
       M5.IMU.getAccelData(
@@ -446,12 +511,40 @@ void Watchdog(){
       //     &yaw);  // Stores the inertial sensor attitude.
       M5.IMU.getTempData(&temp);  // Stores the inertial sensor temperature to
                                   // temp.
+
+      static float ShiftGyroZ = 0;
+      static float GyroZbuffer[100];
+      static int ShiftGyroZCounter = -100;
+
+      if(ShiftGyroZCounter>=0 && GyroCalibrate==false){
+        GyroCalibrate=true;
+        M5.Lcd.fillScreen(BLACK);
+        DirectionalRosette(120, 120, 110);
+        LcdNeedRefresh=true;
+      }
+      if( (ShiftGyroZCounter < 0) || (abs(gyroZ-ShiftGyroZ) < 3 && ShiftGyroZCounter >= 0) ){
+        if(ShiftGyroZCounter<0){
+          GyroZbuffer[ShiftGyroZCounter+100] = gyroZ;
+          ShiftGyroZCounter++;
+        }else{
+          GyroZbuffer[ShiftGyroZCounter] = gyroZ;
+          ShiftGyroZCounter++;
+          if(ShiftGyroZCounter >99){
+            ShiftGyroZCounter = 0;
+          }
+        }
+        for (int i=0; i<100; i++) {
+          ShiftGyroZ = ShiftGyroZ + GyroZbuffer[i];
+        }
+        ShiftGyroZ = ShiftGyroZ/100;
+      }
+
       if(FAstMove==true){
-        if(abs(gyroZ)>8){
-          Target=Target+(int)(gyroZ);
+        if(abs(gyroZ-ShiftGyroZ)>3 && ShiftGyroZCounter >= 0){
+          Target=Target+(int)(gyroZ-ShiftGyroZ);
         }
       }else{
-        Target=Target+(int)(gyroZ/8);
+        Target=Target+(int)( (gyroZ-ShiftGyroZ)/6);
       }
 
       // Serial.print("X Y Z acc ");
@@ -460,12 +553,17 @@ void Watchdog(){
       // Serial.print(accY);
       // Serial.print(" ");
       // Serial.print(accZ);
-      // Serial.print(" gyro ");
+      // Serial.print("gyroZ ");
       // Serial.print(gyroX);
       // Serial.print(" ");
       // Serial.print(gyroY);
+    // Serial.print(gyroZ);
+    // Serial.print(" ");
+    // Serial.print(ShiftGyroZ);
+    // Serial.print(" ");
+    // Serial.println(gyroZ-ShiftGyroZ);
       // Serial.print(" ");
-      // Serial.print(gyroZ);
+      // Serial.println(ShiftGyroZCounter);
       // Serial.print(" pitch/roll/yaw/temp ");
       // Serial.print(pitch);
       // Serial.print(" ");
@@ -504,7 +602,7 @@ void Watchdog(){
       LcdNeedRefresh=true;
       HidenTarget=false;
     }
-    GetAzTimeout[0]=millis();
+    GetAzTimeout=millis();
   }
 
 }
@@ -565,8 +663,16 @@ void BattIcon(int x, int y, int COLOR, int LEVEL){
   M5.Lcd.fillRect(x+3, y-33, 9, 5, COLOR);
 }
 //------------------------------------------------------------------------------
+int Shifted(int DEG){
+  DEG=DEG+StartAzimuth;
+  if(DEG>359){
+    DEG=DEG-360;
+  }
+  return DEG;
+}
+//------------------------------------------------------------------------------
 
-void LcdShow(){
+void LcdShow(int SHIFT){
   // /usr/bin/xplanet -window -longitude 13.7917 -latitude 50.3542 -geometry 240x240 -projection azimuthal -num_times 1 -output map.bmp
   // 320x240px
   //  IMU.delt_t = millis() - IMU.count;
@@ -576,25 +682,25 @@ void LcdShow(){
     if(EnableMap==true){
       M5.Lcd.drawJpgFile(SD, "/map.jpg");
       DirectionalRosette(120, 120, 110);
-      int deg=Target+AntRadiationWidth/2;
-      int deg2=Target-AntRadiationWidth/2;
+      int deg=Shifted(Target+AntRadiationWidth/2);
+      int deg2=Shifted(Target-AntRadiationWidth/2);
       if(HidenTarget==false){
         // M5.Lcd.drawTriangle(120, 120, Xcoordinate(deg,120,100), Ycoordinate(deg,120,100), Xcoordinate(deg2,120,100), Ycoordinate(deg2,120,100), WHITE);
-        deg=Target+AntRadiationWidth/2-1;
-        deg2=Target+AntRadiationWidth/2+1;
+        deg=Shifted(Target+AntRadiationWidth/2-1);
+        deg2=Shifted(Target+AntRadiationWidth/2+1);
         M5.Lcd.fillTriangle(120, 120, Xcoordinate(deg,120,100), Ycoordinate(deg,120,100), Xcoordinate(deg2,120,100), Ycoordinate(deg2,120,100), LIGHTGREY);
-        deg=Target-AntRadiationWidth/2-1;
-        deg2=Target-AntRadiationWidth/2+1;
+        deg=Shifted(Target-AntRadiationWidth/2-1);
+        deg2=Shifted(Target-AntRadiationWidth/2+1);
         M5.Lcd.fillTriangle(120, 120, Xcoordinate(deg,120,100), Ycoordinate(deg,120,100), Xcoordinate(deg2,120,100), Ycoordinate(deg2,120,100), LIGHTGREY);
       }
       TargetOld=Target;
-      deg=Azimuth+AntRadiationWidth/2-1;
-      deg2=Azimuth+AntRadiationWidth/2+1;
+      deg=Shifted(Azimuth+AntRadiationWidth/2-1);
+      deg2=Shifted(Azimuth+AntRadiationWidth/2+1);
       M5.Lcd.fillTriangle(120, 120, Xcoordinate(deg,120,100), Ycoordinate(deg,120,100), Xcoordinate(deg2,120,100), Ycoordinate(deg2,120,100), RED);
-      deg=Azimuth-AntRadiationWidth/2-1;
-      deg2=Azimuth-AntRadiationWidth/2+1;
+      deg=Shifted(Azimuth-AntRadiationWidth/2-1);
+      deg2=Shifted(Azimuth-AntRadiationWidth/2+1);
       M5.Lcd.fillTriangle(120, 120, Xcoordinate(deg,120,100), Ycoordinate(deg,120,100), Xcoordinate(deg2,120,100), Ycoordinate(deg2,120,100), RED);
-    }else{
+    }else if(GyroCalibrate==true){
       //  M5.Lcd.fillScreen(BLACK);
       // M5.Lcd.setCursor(0, 32); M5.Lcd.print(" x   y   z  ");
 
@@ -605,16 +711,32 @@ void LcdShow(){
 
       // M5.Lcd.setCursor(0,  64); M5.Lcd.print((int)(IMU.gx));
       // M5.Lcd.setCursor(32, 64); M5.Lcd.print((int)(IMU.gy));
-      Arrow(TargetOld,120,120,100, 0x000000);
+      Arrow(Shifted(TargetOld),120,120,100, 0x000000);
       if(HidenTarget!=true){
-        Arrow(Target,120,120,100, DARKGREY);
+        if(OnlineStatus==true){
+          Arrow(Shifted(Target),120,120,100, DARKGREY);
+        }else{
+          Arrow(Shifted(Target),120,120,100, BLACK);
+        }
       }
       TargetOld=Target;
       if(Azimuth!=AzimuthOld){
-        Arrow(AzimuthOld,120,120,100, BLACK);
+        Arrow(Shifted(AzimuthOld),120,120,100, BLACK);
         AzimuthOld=Azimuth;
       }
-      Arrow(Azimuth,120,120,100, DARKGREEN);
+      if(OnlineStatus==true){
+        if(Status==4){
+          if(Azimuth>359){
+            Arrow(Shifted(Azimuth),120,120,100, ORANGE);
+          }else{
+            Arrow(Shifted(Azimuth),120,120,100, DARKGREEN);
+          }
+        }else{
+          Arrow(Shifted(Azimuth),120,120,100, RED);
+        }
+      }else{
+        Arrow(Shifted(Azimuth),120,120,100, BLACK);
+      }
       //  }
       // M5.Lcd.setCursor(96, 64); M5.Lcd.print("o/s");
 
@@ -629,36 +751,38 @@ void LcdShow(){
 
       // digitalWrite(myLed, !digitalRead(myLed));  // toggle led
     }
-
     M5.Lcd.setTextSize(5);
-    M5.Lcd.setTextColor(DARKGREEN ,BLACK);
-    // M5.Lcd.setCursor(240, 10);
+    if(OnlineStatus==true){
+      M5.Lcd.setTextColor(DARKGREEN ,BLACK);
+    }else{
+      M5.Lcd.setTextColor(BLACK ,BLACK);
+    }
     M5.Lcd.setCursor(210, 10);
-    if(Azimuth<10){
+    if(Shifted(Azimuth)<10){
       M5.Lcd.print(" ");
     }
-    if(Azimuth<100){
+    if(Shifted(Azimuth)<100){
       M5.Lcd.print(" ");
     }
-    M5.Lcd.print( Azimuth );
+    M5.Lcd.print( Shifted(Azimuth) );
     M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(300, 5);
     M5.Lcd.print("o");
     M5.Lcd.setTextSize(3);
     // if(HidenTarget!=true){
-    if( abs(Target-Azimuth)>10){
+    if( abs(Target-Azimuth)>10 && OnlineStatus==true){
       M5.Lcd.setTextColor(DARKGREY ,BLACK);
     }else{
       M5.Lcd.setTextColor(BLACK ,BLACK);
     }
     M5.Lcd.setCursor(240, 210);
-    if(Target<10){
+    if(Shifted(Target)<10){
       M5.Lcd.print(" ");
     }
-    if(Target<100){
+    if(Shifted(Target)<100){
       M5.Lcd.print(" ");
     }
-    M5.Lcd.print( Target );
+    M5.Lcd.print( Shifted(Target) );
     M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(297, 205);
     M5.Lcd.print("o");
@@ -718,6 +842,9 @@ void DirectionalRosette(int X, int Y, int R){
     dot1=1;
     dot2=3;
   }
+  for (int j=StartAzimuth; j<MaxRotateDegree-360+StartAzimuth; j++) {
+    M5.Lcd.fillCircle(Xcoordinate(j,X,R), Ycoordinate(j,Y,R), 3, 0X528A);
+  }
   M5.Lcd.setTextColor(WHITE ,BLACK);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setCursor(Xcoordinate(0,X-5,R), Ycoordinate(0,Y-5,R)); M5.Lcd.print("N");
@@ -728,7 +855,17 @@ void DirectionalRosette(int X, int Y, int R){
     if(j % 9 == 0){
       // u8g2.drawDisc(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, U8G2_DRAW_ALL);
     }else{
-      M5.Lcd.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), 2, LIGHTGREY);;
+      // Serial.print("j= ");
+      // Serial.print(j);
+      // Serial.print("|StartAzimuth= ");
+      // Serial.print(StartAzimuth);
+      // Serial.print("|MAX= ");
+      // Serial.println(MaxRotateDegree-360+StartAzimuth);
+      if( j >= StartAzimuth/10 && j <= (MaxRotateDegree-360+StartAzimuth)/10 ){
+        M5.Lcd.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), 2, BLACK);
+      }else{
+        M5.Lcd.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), 2, DARKGREY);
+      }
     }
   }
 }
